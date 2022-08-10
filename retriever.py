@@ -34,6 +34,8 @@ class FitbitDataRetriever:
         self._client_secret = client_secret
         self._callback = callback
         self._call_interval = call_interval
+        self._email = ""
+        self._pw = ""
 
     def _auth_url(self) -> str:
         return f'{self._OAUTH_AUTH_URI}?response_type=code&' \
@@ -54,7 +56,9 @@ class FitbitDataRetriever:
     def _check_auth_code_screen(self, browser: WebDriver):
         current_url = browser.current_url
         is_redirect = current_url.startswith(self._callback)
+        print(f'check auth code screen 1')
         try:
+            print(f'check auth code screen try')
             browser.find_element_by_css_selector("#selectAllScope")
             is_scope_selection = True
         except NoSuchElementException:
@@ -62,6 +66,7 @@ class FitbitDataRetriever:
         return is_redirect or is_scope_selection
 
     def _get_auth_code(self, browser: WebDriver) -> str:
+        print(f'check auth code 1')
         wait = WebDriverWait(browser, 120).until(lambda b: self._check_auth_code_screen(b))
 
         if wait is not True:
@@ -123,10 +128,14 @@ class FitbitDataRetriever:
             }
         )
         status_code = response.status_code
+        if status_code == 429 or status_code == 403:
+            print(f"status_code: {status_code}")
+            exit(-1)
         content = response.json()
 
         if status_code != 200:
-            raise Exception(f'Authorization failed\n {content}')
+            # raise Exception(f'Authorization failed\n {content}')
+            return self.authorize(email=self._email, password=self._pw)
         else:
             access_token = content['access_token']
             refresh_token = content['refresh_token']
@@ -143,29 +152,35 @@ class FitbitDataRetriever:
             }
         )
         status_code = response.status_code
+        print(f"status_code: {status_code}")
+        if status_code == 429 or status_code == 403:
+            exit(-1)
         content = response.json()
-
+        
         if status_code == 401 and any([error['errorType'] == 'expired_token' for error in content['errors']]):
+            print(f"token expired. refresh trial: {trial}")
             if trial > 5:
                 raise Exception(f'Failed to retrieve refresh token.')
 
-            self._refresh_auth_token(refresh_token)
+            access_token, refresh_token, user_id = self._refresh_auth_token(refresh_token)
             return self._get_data(url, access_token, refresh_token, trial + 1)
         elif status_code == 200:
-            return content
+            return access_token, refresh_token, content
         else:
             raise Exception(f'Unhandled Error\n {content}')
 
-    def _get_activity_data(self, user_id: str, date: str, resource: str, access_token: str, refresh_token: str) -> dict:
+    def _get_activity_data(self, user_id: str, date: str, resource: str, access_token: str, refresh_token: str) -> \
+            Tuple[str, str, dict]:
         url = f'https://api.fitbit.com/1/user/{user_id}/{resource}/date/{date}/1d.json'
         return self._get_data(url=url, access_token=access_token, refresh_token=refresh_token)
 
     def _get_intra_day_activity_data(self, user_id: str, date: str, resource: str, access_token: str,
-                                     refresh_token: str) -> dict:
+                                     refresh_token: str) -> Tuple[str, str, dict]:
         url = f'https://api.fitbit.com/1/user/{user_id}/{resource}/date/{date}/1d/1min.json'
         return self._get_data(url=url, access_token=access_token, refresh_token=refresh_token)
 
-    def _get_intra_day_heart_rate_data(self, user_id: str, date: str, access_token: str, refresh_token: str) -> dict:
+    def _get_intra_day_heart_rate_data(self, user_id: str, date: str, access_token: str, refresh_token: str) -> \
+            Tuple[str, str, dict]:
         url = f'https://api.fitbit.com/1/user/{user_id}/{self._RESOURCE_HEART_INTRA}/date/{date}/1d/1sec.json'
         return self._get_data(url=url, access_token=access_token, refresh_token=refresh_token)
 
@@ -183,76 +198,88 @@ class FitbitDataRetriever:
         else:
             return []
 
-    def _get_all_data(self, user_id: str, date: str, access_token: str, refresh_token: str):
+    def _get_all_data(self, user_id: str, date: str, access_token: str, refresh_token: str,
+                      intraday_flag: bool = False):
         result = {
             'date': date
         }
 
-        min_sedentary = self._get_activity_data(
+        access_token, refresh_token, min_sedentary = self._get_activity_data(
             user_id, date, self._RESOURCE_MINUTES_SEDENTARY, access_token, refresh_token
         )
         result['minutesSedentary'] = self._get_simple_value(min_sedentary, 'activities-tracker-minutesSedentary')
+        print(f"(done): minutesSedentary")
 
-        min_lightly_active = self._get_activity_data(
+        access_token, refresh_token, min_lightly_active = self._get_activity_data(
             user_id, date, self._RESOURCE_MINUTES_LIGHTLY_ACTIVE, access_token, refresh_token
         )
         result['minutesLightlyActive'] = self._get_simple_value(min_lightly_active,
                                                                 'activities-tracker-minutesLightlyActive')
+        print(f"(done): minutesLightlyActive")
 
-        min_fairly_active = self._get_activity_data(
+        access_token, refresh_token, min_fairly_active = self._get_activity_data(
             user_id, date, self._RESOURCE_MINUTES_FAIRLY_ACTIVE, access_token, refresh_token
         )
         result['minutesFairlyActive'] = self._get_simple_value(min_fairly_active,
                                                                'activities-tracker-minutesFairlyActive')
+        print(f"(done): minutesFairlyActive")
 
-        min_very_active = self._get_activity_data(
+        access_token, refresh_token, min_very_active = self._get_activity_data(
             user_id, date, self._RESOURCE_MINUTES_VERY_ACTIVE, access_token, refresh_token
         )
         result['minutesVeryActive'] = self._get_simple_value(min_very_active, 'activities-tracker-minutesVeryActive')
+        print(f"(done): minutesVeryActive")
 
-        min_activity_calories = self._get_activity_data(
+        access_token, refresh_token, min_activity_calories = self._get_activity_data(
             user_id, date, self._RESOURCE_ACTIVITY_CALORIES, access_token, refresh_token
         )
         result['activityCalories'] = self._get_simple_value(min_activity_calories,
                                                             'activities-tracker-activityCalories')
+        print(f"(done): activityCalories")
 
-        intra_calories = self._get_intra_day_activity_data(
-            user_id, date, self._RESOURCE_CALORIES_INTRA, access_token, refresh_token
-        )
-        result['calories'] = self._get_simple_value(intra_calories, 'activities-calories')
-        result['calories-intraday'] = self._get_intraday_value(intra_calories, 'activities-calories-intraday')
+        if intraday_flag:
+            access_token, refresh_token, intra_calories = self._get_intra_day_activity_data(
+                user_id, date, self._RESOURCE_CALORIES_INTRA, access_token, refresh_token
+            )
+            result['calories'] = self._get_simple_value(intra_calories, 'activities-calories')
+            result['calories-intraday'] = self._get_intraday_value(intra_calories, 'activities-calories-intraday')
+            print(f"(done): calories & calories-intraday")
 
-        intra_steps = self._get_intra_day_activity_data(
-            user_id, date, self._RESOURCE_STEPS_INTRA, access_token, refresh_token
-        )
-        result['steps'] = self._get_simple_value(intra_steps, 'activities-steps')
-        result['steps-intraday'] = self._get_intraday_value(intra_steps, 'activities-steps-intraday')
+            access_token, refresh_token, intra_steps = self._get_intra_day_activity_data(
+                user_id, date, self._RESOURCE_STEPS_INTRA, access_token, refresh_token
+            )
+            result['steps'] = self._get_simple_value(intra_steps, 'activities-steps')
+            result['steps-intraday'] = self._get_intraday_value(intra_steps, 'activities-steps-intraday')
+            print(f"(done): steps & steps-intraday")
 
-        intra_distance = self._get_intra_day_activity_data(
-            user_id, date, self._RESOURCE_DISTANCE_INTRA, access_token, refresh_token
-        )
-        result['distance'] = self._get_simple_value(intra_distance, 'activities-distance')
-        result['distance-intraday'] = self._get_intraday_value(intra_distance, 'activities-distance-intraday')
+            access_token, refresh_token, intra_distance = self._get_intra_day_activity_data(
+                user_id, date, self._RESOURCE_DISTANCE_INTRA, access_token, refresh_token
+            )
+            result['distance'] = self._get_simple_value(intra_distance, 'activities-distance')
+            result['distance-intraday'] = self._get_intraday_value(intra_distance, 'activities-distance-intraday')
+            print(f"(done): distance & distance-intraday")
 
-        intra_floors = self._get_intra_day_activity_data(
-            user_id, date, self._RESOURCE_FLOORS_INTRA, access_token, refresh_token
-        )
-        result['floors'] = self._get_simple_value(intra_floors, 'activities-floors')
-        result['floors-intraday'] = self._get_intraday_value(intra_floors, 'activities-floors-intraday')
+            """ ### Fitbit Inspire HR does not have altimeter ###
+            intra_floors = self._get_intra_day_activity_data(
+                user_id, date, self._RESOURCE_FLOORS_INTRA, access_token, refresh_token
+            )
+            result['floors'] = self._get_simple_value(intra_floors, 'activities-floors')
+            result['floors-intraday'] = self._get_intraday_value(intra_floors, 'activities-floors-intraday')
+    
+            intra_elevation = self._get_intra_day_activity_data(
+                user_id, date, self._RESOURCE_ELEVATION_INTRA, access_token, refresh_token
+            )
+            result['elevation'] = self._get_simple_value(intra_elevation, 'activities-elevation')
+            result['elevation-intraday'] = self._get_intraday_value(intra_elevation, 'activities-elevation-intraday')
+            """
+            access_token, refresh_token, intra_heart_rate = self._get_intra_day_heart_rate_data(
+                user_id, date, access_token, refresh_token
+            )
+            result['heart'] = self._get_simple_value(intra_heart_rate, 'activities-heart')
+            result['heart-intraday'] = self._get_intraday_value(intra_heart_rate, 'activities-heart-intraday')
+            print(f"(done): heart & heart-intraday")
 
-        intra_elevation = self._get_intra_day_activity_data(
-            user_id, date, self._RESOURCE_ELEVATION_INTRA, access_token, refresh_token
-        )
-        result['elevation'] = self._get_simple_value(intra_elevation, 'activities-elevation')
-        result['elevation-intraday'] = self._get_intraday_value(intra_elevation, 'activities-elevation-intraday')
-
-        intra_heart_rate = self._get_intra_day_heart_rate_data(
-            user_id, date, access_token, refresh_token
-        )
-        result['heart'] = self._get_simple_value(intra_heart_rate, 'activities-heart')
-        result['heart-intraday'] = self._get_intraday_value(intra_heart_rate, 'activities-heart-intraday')
-
-        return result
+        return access_token, refresh_token, result
 
     def authorize(self, email: str, password: str) -> Tuple[str, str, str]:
         option = webdriver.ChromeOptions()
@@ -263,11 +290,15 @@ class FitbitDataRetriever:
             browser.implicitly_wait(10)
             browser.get(self._auth_url())
 
+            #"""
             self._handle_sign_in(
                 browser=browser,
                 email=email,
                 password=password
             )
+            #"""
+            #browser.implicitly_wait(30)
+            
             print(f'-- Sign In: {email} / {password}')
 
             auth_code = self._get_auth_code(
@@ -281,14 +312,17 @@ class FitbitDataRetriever:
             print(f'-- Token: {access_token}')
             return access_token, refresh_token, user_id
 
-    def retrieve(self, access_token: str, refresh_token: str, user_id: str, date: str):
-        result = self._get_all_data(
+    def retrieve(self, access_token: str, refresh_token: str, user_id: str, date: str, email: str, pw: str):
+        self._email = email
+        self._pw = pw
+
+        access_token, refresh_token, result = self._get_all_data(
             date=date,
             user_id=user_id,
             access_token=access_token,
-            refresh_token=refresh_token
+            refresh_token=refresh_token,
+            intraday_flag=True
         )
         print(f"-- Retrieve date: {date}")
 
-        return result
-
+        return access_token, refresh_token,  result

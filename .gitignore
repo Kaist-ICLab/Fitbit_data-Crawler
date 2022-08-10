@@ -125,6 +125,18 @@ dmypy.json
 
 .idea/
 
-main.py
+# main.py
 
-chromedriver-85.exe
+# Chrome driver
+*.exe
+
+# Data files
+/alldata
+
+# account info
+*.csv
+*.tsv
+
+# secret files for Fitbit API usage
+secret.txt
+token_info.pkl
